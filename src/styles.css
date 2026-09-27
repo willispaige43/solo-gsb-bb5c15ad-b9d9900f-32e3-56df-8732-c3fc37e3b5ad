@@ -548,6 +548,55 @@ button.mini.danger:hover { color: var(--error); border-color: var(--error); }
   color: var(--error);
 }
 
+/* ---------- Terminology unification ---------- */
+.term-panel .small { font-size: 11.5px; }
+.term-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 8px 0 4px;
+}
+.term-rule-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.term-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  position: relative;
+}
+.term-rule-row.dup .term-from { border-color: var(--warn); }
+.term-rule-idx {
+  flex: 0 0 22px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.term-input { flex: 1 1 0; min-width: 90px; }
+.term-arrow { color: var(--muted); flex: 0 0 auto; }
+.term-rule-del {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.term-rule-note {
+  flex: 1 1 100%;
+  font-size: 11px;
+  color: var(--warn);
+  padding-left: 28px;
+}
+.term-list { max-height: 320px; overflow-y: auto; }
+.term-hit-badge {
+  font-size: 10.5px;
+  color: var(--ok);
+  background: rgba(63, 207, 142, .12);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.term-rule-hits { color: var(--muted); font-size: 10.5px; }
+
 /* ---------- Inspector ---------- */
 .inspector .row { margin-bottom: 10px; }
 .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

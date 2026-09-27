@@ -6,6 +6,7 @@ import { planTwoPointSync } from '../src/lib/sync';
 import { planMerge, joinBilingualText } from '../src/lib/merge';
 import { planExcerpt, rewriteTimestampTags } from '../src/lib/excerpt';
 import { suggestWrap, planSmartWrap, visibleWidth } from '../src/lib/wrap';
+import { applyTerminology, planTerminology } from '../src/lib/term';
 import { detectIssues } from '../src/lib/issues';
 import {
   parseCueSettings,
@@ -964,6 +965,231 @@ cid-9
     }
   }
   ok('智能分行：建议幂等且求解确定');
+}
+
+// ---------- 术语统一 ----------
+
+function tcue(id: string, text: string, locked = false): Cue {
+  return { id, identifier: '', start: 0, end: 2, text, settings: '', locked };
+}
+
+// 51. 基本替换：按可见文字替换、命中次数统计、未命中文字保留
+{
+  const r = applyTerminology('人工智能很好，人工智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r.text, 'AI很好，AI');
+  assert.strictEqual(r.hits, 2);
+  assert.deepStrictEqual(r.ruleHits, [{ ruleIndex: 0, count: 2 }]);
+  ok('术语统一：基本替换与命中计数');
+}
+
+// 52. 允许原词跨越内联格式标签，标签原文、顺序与位置语义保留
+{
+  // 标签只包裹命中首字素：替换后仍包裹替换词首字（相对位置按比例映射）
+  const r = applyTerminology('<b>人</b>工智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r.text, '<b>A</b>I');
+  assert.strictEqual(r.hits, 1);
+
+  // 标签夹在命中字素之间：按相对缝隙插入替换词对应位置（超出替换词长度则贴末尾）
+  const r2 = applyTerminology('人<b>工</b>智能', [{ from: '人工智能', to: '机器' }]);
+  assert.strictEqual(r2.text, '机<b>器</b>');
+
+  // 命中范围外的标签与文字原样保留
+  const r3 = applyTerminology('前缀<i>x</i>人工智能后缀', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r3.text, '前缀<i>x</i>AI后缀');
+
+  // 标签贴在命中外侧：<b>人工智能</b> 标签完整包裹替换词
+  const r4 = applyTerminology('<b>人工智能</b>', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r4.text, '<b>AI</b>');
+
+  // 同一命中内多个内联标签顺序原样保留；超出替换词长度的缝隙贴末尾
+  const r5 = applyTerminology('a人<b>工</b><i>智</i>能z', [{ from: '人工智能', to: '机器' }]);
+  assert.strictEqual(r5.text, 'a机<b>器</b><i></i>z');
+  ok('术语统一：跨越内联标签匹配并保留标签原文/顺序/位置');
+}
+
+// 53. 时间戳标签是匹配边界，原词不得跨越；标签原样保留
+{
+  const r = applyTerminology('<00:01.000>人工智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r.text, '<00:01.000>AI'); // 标签之后的正文仍可命中
+
+  // 标签把可见文字截断：跨标签的原词不命中，标签原样
+  const r2 = applyTerminology('人工<00:01.000>智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r2.text, '人工<00:01.000>智能');
+  assert.strictEqual(r2.hits, 0);
+
+  // 无法解析为时间戳的尖括号不是边界：<00:00> 缺毫秒，可跨越
+  const r3 = applyTerminology('人工<00:00>智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r3.text, 'AI<00:00>');
+  assert.strictEqual(r3.hits, 1);
+  ok('术语统一：时间戳标签为边界，非时间戳尖括号可跨越');
+}
+
+// 54. 换行也是匹配边界：不跨行匹配，换行原样保留
+{
+  const r = applyTerminology('人工\n智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r.text, '人工\n智能');
+  assert.strictEqual(r.hits, 0);
+
+  const r2 = applyTerminology('人工智能\n人工智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r2.text, 'AI\nAI');
+  assert.strictEqual(r2.hits, 2);
+  ok('术语统一：换行为匹配边界且原样保留');
+}
+
+// 55. 同位置多规则命中：最长原词优先，等长按输入顺序
+{
+  // 「人工智能」比「人工」更长，取长规则
+  const r = applyTerminology('人工智能', [
+    { from: '人工', to: 'X' },
+    { from: '人工智能', to: 'AI' },
+  ]);
+  assert.strictEqual(r.text, 'AI');
+  assert.deepStrictEqual(r.ruleHits, [{ ruleIndex: 1, count: 1 }]);
+
+  // 等长：先输入者胜
+  const r2 = applyTerminology('人工智能', [
+    { from: '人工智能', to: '一' },
+    { from: '人工智能', to: '二' },
+  ]);
+  assert.strictEqual(r2.text, '一');
+
+  // 左起点处短词与稍后起点的长词：leftmost-longest —— 起点优先取该处最长
+  const r3 = applyTerminology('人工智能', [
+    { from: '人工', to: '短' },
+    { from: '工智能', to: '更长词' },
+  ]);
+  assert.strictEqual(r3.text, '短智能');
+  ok('术语统一：最长优先、等长输入顺序优先、左起点优先');
+}
+
+// 56. 基于原文一次匹配：替换结果不再参与匹配；相邻命中互不重叠
+{
+  // 替换为「bb」后不会再被 b->X 规则匹配（否则会出现 X X）
+  const r = applyTerminology('aaa', [
+    { from: 'a', to: 'b' },
+  ]);
+  assert.strictEqual(r.text, 'bbb');
+
+  // 链式替换若迭代会无限/多次：aa -> b 只做一轮
+  const r2 = applyTerminology('aaaa', [{ from: 'aa', to: 'a' }]);
+  assert.strictEqual(r2.text, 'aa');
+  assert.strictEqual(r2.hits, 2);
+  ok('术语统一：基于原文一次匹配，替换结果不再参与匹配');
+}
+
+// 57. 空替换词（删除原词）：命中外的标签保留，命中内标签贴在末尾缝隙
+{
+  const r = applyTerminology('a人工智能b', [{ from: '人工智能', to: '' }]);
+  assert.strictEqual(r.text, 'ab');
+
+  const r2 = applyTerminology('人<b>工</b>智能', [{ from: '人工智能', to: '' }]);
+  assert.strictEqual(r2.text, '<b></b>');
+  ok('术语统一：空替换词删除可见文字但保留标签');
+}
+
+// 58. 字素边界匹配（emoji / 组合字符不被拆开）
+{
+  const r = applyTerminology('👨‍👩‍👧 家庭', [{ from: '👨‍👩‍👧', to: '家' }]);
+  assert.strictEqual(r.text, '家 家庭');
+  assert.strictEqual(r.hits, 1);
+  ok('术语统一：按字素簇匹配');
+}
+
+// 59. 批量规划：只处理未锁定片段；分类、统计与输入不变
+{
+  const cs: Cue[] = [
+    tcue('a', '人工智能'),
+    tcue('b', '无命中'),
+    tcue('c', '人工智能人工智能'),
+    tcue('L', '人工智能', true),
+  ];
+  const snapshot = JSON.parse(JSON.stringify(cs));
+  const plan = planTerminology(cs, [{ from: '人工智能', to: 'AI' }]);
+  assert.deepStrictEqual(plan.changes.map((x) => x.id), ['a', 'c']);
+  assert.strictEqual(plan.changes[0].replaced, 'AI');
+  assert.strictEqual(plan.changes[1].replaced, 'AIAI');
+  assert.strictEqual(plan.changes[1].hits, 2);
+  assert.strictEqual(plan.unlockedUnchanged, 1);
+  assert.strictEqual(plan.lockedSkipped, 1);
+  assert.strictEqual(plan.totalHits, 3);
+  assert.deepStrictEqual(cs, snapshot);
+  ok('术语统一：批量仅处理未锁定片段，统计正确，输入不变');
+}
+
+// 60. 空原词忽略、重复原词只取最先输入；无规则时原样
+{
+  const plan = planTerminology(
+    [tcue('a', '人工智能')],
+    [
+      { from: '', to: 'X' },
+      { from: '人工智能', to: '一' },
+      { from: '人工智能', to: '二' },
+    ],
+  );
+  assert.strictEqual(plan.rules.length, 1);
+  assert.strictEqual(plan.rules[0].inputIndex, 1);
+  assert.strictEqual(plan.changes[0].replaced, '一');
+
+  const r = applyTerminology('人工智能', []);
+  assert.strictEqual(r.text, '人工智能');
+  assert.strictEqual(r.hits, 0);
+  ok('术语统一：空原词忽略、重复原词取最先、无规则原样');
+}
+
+// 61. 大小写敏感；多时间戳标签分段、跨段命中不合并、全部标签原样
+{
+  const r = applyTerminology('ABC abc', [{ from: 'abc', to: 'X' }]);
+  assert.strictEqual(r.text, 'ABC X');
+  assert.strictEqual(r.hits, 1);
+
+  const text = '人工<00:01.000>智能<00:02.000>人工智能';
+  const r2 = applyTerminology(text, [{ from: '人工智能', to: 'AI' }]);
+  // 跨第一个时间戳的「人工…智能」不命中；末段「人工智能」命中
+  assert.strictEqual(r2.text, '人工<00:01.000>智能<00:02.000>AI');
+  assert.strictEqual(r2.hits, 1);
+
+  // 每段独立计数；同段内相邻命中
+  const r3 = applyTerminology('人工智能<00:01.000>人工智能', [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(r3.text, 'AI<00:01.000>AI');
+  assert.strictEqual(r3.hits, 2);
+
+  // 不完整的尖括号按普通字符参与匹配
+  const r4 = applyTerminology('人工<b智能', [{ from: '人工<b智能', to: 'X' }]);
+  assert.strictEqual(r4.text, 'X');
+  assert.strictEqual(r4.hits, 1);
+  ok('术语统一：大小写敏感、时间戳分段独立计数、不完整尖括号按字符处理');
+}
+
+// 62. 确认写入 + 导出往返：只改正文，时间码/标识符/设置/锁定/文件头保留
+{
+  const v = `WEBVTT
+
+NOTE 保留头
+
+cid-61
+00:01.000 --> 00:04.000 line:90% align:middle
+人工<b>智能</b>真好用
+`;
+  const p = parseVTT(v);
+  assert.ok(!p.error, p.error);
+  const plan = planTerminology(p.cues, [{ from: '人工智能', to: 'AI' }]);
+  assert.strictEqual(plan.changes.length, 1);
+  const applied = p.cues.map((c) =>
+    c.id === plan.changes[0].id ? { ...c, text: plan.changes[0].replaced } : c,
+  );
+  assert.strictEqual(applied[0].start, 1);
+  assert.strictEqual(applied[0].end, 4);
+  assert.strictEqual(applied[0].identifier, 'cid-61');
+  assert.strictEqual(applied[0].settings, 'line:90% align:middle');
+  const out = serializeVTT(applied, p.preamble);
+  assert.ok(out.includes('NOTE 保留头'));
+  // 命中跨 <b>：开标签在缝隙 3（超出替换词长度 2）贴替换词末尾，闭标签随之
+  assert.ok(out.includes('AI<b></b>真好用'), out);
+  assert.ok(out.includes('00:01.000 --> 00:04.000 line:90% align:middle'));
+  const re = parseVTT(out);
+  assert.ok(!re.error, re.error);
+  assert.strictEqual(re.cues[0].text, 'AI<b></b>真好用');
+  ok('术语统一：应用后导出保留标识符/设置/时间码/文件头，正文写入且可往返');
 }
 
 console.log(`\n全部 ${passed} 组测试通过 ✅`);
