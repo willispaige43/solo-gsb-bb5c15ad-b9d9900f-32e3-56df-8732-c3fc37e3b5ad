@@ -6,6 +6,7 @@ import { planTwoPointSync } from '../src/lib/sync';
 import { planMerge, joinBilingualText } from '../src/lib/merge';
 import { planExcerpt, rewriteTimestampTags } from '../src/lib/excerpt';
 import { suggestWrap, planSmartWrap, visibleWidth } from '../src/lib/wrap';
+import { planTermReplace, replaceTerms, type TermRule } from '../src/lib/terms';
 import { detectIssues } from '../src/lib/issues';
 import {
   parseCueSettings,
@@ -964,6 +965,168 @@ cid-9
     }
   }
   ok('智能分行：建议幂等且求解确定');
+}
+
+// ---------- 术语统一 ----------
+
+let ruleSeq = 0;
+function trules(...pairs: [string, string][]): TermRule[] {
+  return pairs.map(([from, to]) => ({ id: `r${++ruleSeq}`, from, to }));
+}
+
+// 51. 基本替换：可见文字精确匹配，逐规则计数
+{
+  const r = replaceTerms('你好世界，世界你好', trules(['世界', '天下']));
+  assert.strictEqual(r.text, '你好天下，天下你好');
+  assert.strictEqual(r.hits, 2);
+  assert.deepStrictEqual(r.perRule, [2]);
+  // 无命中时正文原样
+  const none = replaceTerms('你好', trules(['世界', '天下']));
+  assert.strictEqual(none.text, '你好');
+  assert.strictEqual(none.hits, 0);
+  ok('术语统一：基本替换与命中计数');
+}
+
+// 52. 原词跨越内联格式标签：标签原文与位置保留，标签外未命中文字保留
+{
+  const r = replaceTerms('<b>术语</b>统一', trules(['语统', 'X']));
+  assert.strictEqual(r.text, '<b>术X</b>一');
+  assert.strictEqual(r.hits, 1);
+
+  // 命中区间内部含完整标签对：标签原样留在原位
+  const r2 = replaceTerms('AB<i>CD</i>EF', trules(['BCDE', 'x']));
+  assert.strictEqual(r2.text, 'Ax<i></i>F');
+  assert.strictEqual(r2.hits, 1);
+
+  // 语音标签等内联标签内部文字不可见，不参与匹配
+  const r3 = replaceTerms('<v Bob>你好</v>', trules(['Bob', 'x'], ['你好', '世界']));
+  assert.strictEqual(r3.text, '<v Bob>世界</v>');
+  assert.strictEqual(r3.hits, 1);
+  assert.deepStrictEqual(r3.perRule, [0, 1]);
+  ok('术语统一：原词跨越内联标签，标签原文/顺序保留');
+}
+
+// 53. 时间戳标签是匹配边界：不可跨越、内部不可见、标签原样保留
+{
+  const text = '术语<00:01.500>术语';
+  const cross = replaceTerms(text, trules(['语术', 'X']));
+  assert.strictEqual(cross.text, text); // 跨时间戳标签不命中
+  assert.strictEqual(cross.hits, 0);
+
+  const both = replaceTerms(text, trules(['术语', '统一']));
+  assert.strictEqual(both.text, '统一<00:01.500>统一');
+  assert.strictEqual(both.hits, 2);
+
+  // 时间戳标签内部文字不可见
+  const inner = replaceTerms(text, trules(['00:01', 'T'], ['01.500', 'T']));
+  assert.strictEqual(inner.text, text);
+  assert.strictEqual(inner.hits, 0);
+  ok('术语统一：时间戳标签为匹配边界且原样保留');
+}
+
+// 54. 同一位置多条规则命中：取最长原词，等长按输入顺序
+{
+  const r = replaceTerms('abcabc', trules(['ab', 'X'], ['abc', 'Y']));
+  assert.strictEqual(r.text, 'YY');
+  assert.deepStrictEqual(r.perRule, [0, 2]);
+
+  // 等长（同词重复）按输入顺序取先者
+  const r2 = replaceTerms('ab', trules(['ab', '先'], ['ab', '后']));
+  assert.strictEqual(r2.text, '先');
+  assert.deepStrictEqual(r2.perRule, [1, 0]);
+
+  // 较短规则仍可在较长规则未命中的位置生效
+  const r3 = replaceTerms('zab', trules(['abc', 'Y'], ['ab', 'X']));
+  assert.strictEqual(r3.text, 'zX');
+  ok('术语统一：最长优先，等长按输入顺序');
+}
+
+// 55. 基于原文一次匹配：替换结果不再参与匹配（不级联）
+{
+  const r = replaceTerms('aa', trules(['a', 'b'], ['b', 'c']));
+  assert.strictEqual(r.text, 'bb'); // 不是 cc
+  assert.deepStrictEqual(r.perRule, [2, 0]);
+
+  // 替换词与原词相同也不造成死循环或二次命中
+  const r2 = replaceTerms('abab', trules(['ab', 'ab']));
+  assert.strictEqual(r2.text, 'abab');
+  assert.strictEqual(r2.hits, 2);
+  assert.deepStrictEqual(r2.perRule, [2]);
+  ok('术语统一：一次匹配不级联');
+}
+
+// 56. 空替换词即删除；不完整的 “<” 按普通文字处理
+{
+  const r = replaceTerms('这是术语啊', trules(['术语', '']));
+  assert.strictEqual(r.text, '这是啊');
+  assert.strictEqual(r.hits, 1);
+
+  const r2 = replaceTerms('a<b 术语', trules(['术语', 'X']));
+  assert.strictEqual(r2.text, 'a<b X');
+
+  const r3 = replaceTerms('1 < 2', trules(['<', '≤']));
+  assert.strictEqual(r3.text, '1 ≤ 2');
+  ok('术语统一：空替换词删除命中，不完整 “<” 按文字处理');
+}
+
+// 57. 批量规划：仅未锁定片段，命中条目/计数正确，输入不被修改
+{
+  const cs: Cue[] = [
+    cueObj('a', '术语统一与术语'),
+    cueObj('b', '没有命中'),
+    cueObj('c', '<b>术语</b>也好', true), // 锁定：跳过
+  ];
+  const snapshot = JSON.parse(JSON.stringify(cs));
+  const rules = trules(['术语', '名词'], ['不存在', 'X'], ['', '空原词忽略']);
+  const plan = planTermReplace(cs, rules);
+  assert.strictEqual(plan.scanned, 2);
+  assert.strictEqual(plan.lockedSkipped, 1);
+  assert.deepStrictEqual(plan.entries.map((e) => e.id), ['a']);
+  assert.strictEqual(plan.entries[0].hits, 2);
+  assert.strictEqual(plan.entries[0].replaced, '名词统一与名词');
+  assert.strictEqual(plan.totalHits, 2);
+  assert.deepStrictEqual(plan.rules.map((r) => r.hits), [2, 0]);
+  assert.deepStrictEqual(cs, snapshot);
+  ok('术语统一：批量仅处理未锁定片段，计数正确，输入不变');
+}
+
+// 58. 端到端：应用后导出保留时间码/标识符/设置/文件头/锁定状态，可再解析
+{
+  const v = `WEBVTT
+
+NOTE 保留头
+
+cid-3
+00:01.000 --> 00:04.000 line:90% align:middle
+他说<00:02.000>术语<b>术语</b>好
+
+00:05.000 --> 00:06.000
+术语锁定
+`;
+  const p = parseVTT(v);
+  assert.ok(!p.error, p.error);
+  p.cues[1].locked = true;
+  const plan = planTermReplace(p.cues, trules(['术语', '名词']));
+  assert.strictEqual(plan.entries.length, 1);
+  assert.strictEqual(plan.entries[0].hits, 2);
+  assert.strictEqual(plan.entries[0].replaced, '他说<00:02.000>名词<b>名词</b>好');
+  const byId = new Map(plan.entries.map((e) => [e.id, e.replaced]));
+  const applied = p.cues.map((c) => (byId.has(c.id) ? { ...c, text: byId.get(c.id)! } : c));
+  const out = serializeVTT(applied, p.preamble);
+  assert.ok(out.includes('NOTE 保留头'));
+  assert.ok(out.includes('cid-3'));
+  assert.ok(out.includes('00:01.000 --> 00:04.000 line:90% align:middle'));
+  assert.ok(out.includes('他说<00:02.000>名词<b>名词</b>好'));
+  assert.ok(out.includes('术语锁定')); // 锁定片段正文不变
+  const re = parseVTT(out);
+  assert.ok(!re.error, re.error);
+  assert.strictEqual(re.cues.length, 2);
+  assert.strictEqual(re.cues[0].identifier, 'cid-3');
+  assert.strictEqual(re.cues[0].settings, 'line:90% align:middle');
+  assert.strictEqual(re.cues[0].start, 1);
+  assert.strictEqual(re.cues[0].end, 4);
+  assert.strictEqual(re.cues[1].text, '术语锁定');
+  ok('术语统一：应用后导出保留时间码/标识符/设置/文件头，锁定片段不变');
 }
 
 console.log(`\n全部 ${passed} 组测试通过 ✅`);

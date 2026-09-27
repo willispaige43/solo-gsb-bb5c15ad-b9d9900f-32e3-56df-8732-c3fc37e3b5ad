@@ -16,6 +16,7 @@ import SyncPanel from './components/SyncPanel';
 import MergePanel from './components/MergePanel';
 import ExcerptPanel from './components/ExcerptPanel';
 import WrapPanel from './components/WrapPanel';
+import TermsPanel from './components/TermsPanel';
 
 export default function App() {
   const initial = useMemo(() => parseVTT(SAMPLE_VTT), []);
@@ -114,6 +115,14 @@ export default function App() {
     setToast(`智能分行完成：已调整 ${entries.length} 个片段的换行，无解与锁定片段保持原样。`);
   }
 
+  function applyTerms(entries: { id: string; text: string }[], totalHits: number) {
+    // 确认后仅把命中片段的正文替换为预览文本；时间码、标识符、设置与锁定状态原样保留
+    const byId = new Map(entries.map((e) => [e.id, e.text]));
+    setCues((cs) => cs.map((c) => (byId.has(c.id) ? { ...c, text: byId.get(c.id)! } : c)));
+    setConflict(null);
+    setToast(`术语统一完成：已改写 ${entries.length} 个片段（共 ${totalHits} 处替换），锁定与未命中片段保持原样。`);
+  }
+
   function exportVTT() {
     if (cues.length === 0) {
       setToast('没有可导出的片段。');
@@ -155,7 +164,7 @@ export default function App() {
           <span className="logo">🎞️</span>
           <div>
             <h1>WebVTT 字幕时序修复器</h1>
-            <span className="muted small">本地运行 · 拖动传播 · 锁定保护 · 布局预览 · 两点同步 · 双语合并 · 摘录导出 · 智能分行</span>
+            <span className="muted small">本地运行 · 拖动传播 · 锁定保护 · 布局预览 · 两点同步 · 双语合并 · 摘录导出 · 智能分行 · 术语统一</span>
           </div>
         </div>
         <div className="header-actions">
@@ -247,6 +256,14 @@ export default function App() {
           <WrapPanel
             cues={sortedCues}
             onApply={applyWrap}
+            onJump={(id) => {
+              setSelectedId(id);
+              scrollToRef.current(id);
+            }}
+          />
+          <TermsPanel
+            cues={sortedCues}
+            onApply={applyTerms}
             onJump={(id) => {
               setSelectedId(id);
               scrollToRef.current(id);

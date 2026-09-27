@@ -548,6 +548,58 @@ button.mini.danger:hover { color: var(--error); border-color: var(--error); }
   color: var(--error);
 }
 
+/* ---------- Term unification ---------- */
+.term-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.term-rule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+.term-rule-head {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: .03em;
+}
+.term-input {
+  width: 100%;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+}
+.term-input.empty { border-style: dashed; }
+.term-input:focus { outline: none; border-color: var(--accent); }
+.term-arrow { color: var(--muted); text-align: center; }
+.term-rule-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 58px;
+  justify-content: flex-end;
+}
+.term-hits {
+  font-size: 10.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+.term-hits.on {
+  color: var(--ok);
+  background: rgba(63, 207, 142, .12);
+}
+.term-list { max-height: 320px; overflow-y: auto; }
+.term-row { border-left: 3px solid var(--ok); }
+
 /* ---------- Inspector ---------- */
 .inspector .row { margin-bottom: 10px; }
 .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
